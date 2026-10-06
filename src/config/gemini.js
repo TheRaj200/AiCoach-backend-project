@@ -19,15 +19,10 @@ export const getGeminiClient = () => {
 export const generateAIJSON = async (prompt, systemInstruction = '') => {
   const apiKey = process.env.GEMINI_API_KEY;
   const ai = getGeminiClient();
-  const modelName = process.env.GEMINI_MODEL || 'gemini-2.5-flash';
+  const modelName = process.env.GEMINI_MODEL || 'gemma-4-31b-it';
 
   if (!ai || !apiKey) {
-    console.warn('⚠️ [AI] GEMINI_API_KEY not configured. Falling back to built-in generator.');
     return null;
-  }
-
-  if (!apiKey.startsWith('AIzaSy')) {
-    console.warn('⚠️ [AI] Note: Standard Google AI Studio keys start with "AIzaSy...". Current key might be an OAuth token.');
   }
 
   try {
@@ -45,7 +40,6 @@ export const generateAIJSON = async (prompt, systemInstruction = '') => {
     const cleanedText = text.replace(/^```json\s*/i, '').replace(/^```\s*/i, '').replace(/```$/i, '').trim();
     return JSON.parse(cleanedText);
   } catch (error) {
-    console.warn('⚠️ [AI] Gemini API Generation failed (using intelligent fallback):', error.message);
     return null;
   }
 };

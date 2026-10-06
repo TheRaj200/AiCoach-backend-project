@@ -40,6 +40,9 @@ export const userRepository = {
         memoryUsers.set(obj._id.toString(), obj);
         return obj;
       } catch (err) {
+        if (err.code === 11000 || (err.message && err.message.includes('duplicate key'))) {
+          throw new Error('An account with this email already exists. Please log in instead.');
+        }
         console.warn('⚠️ [UserRepo] Mongo createUser failed, using memory fallback:', err.message);
       }
     }

@@ -5,6 +5,7 @@ const router = Router();
 
 // Auth Endpoints strictly delegate to Controller
 router.post('/register-otp', authController.requestOtp);
+router.post('/resend-otp', authController.resendOtp);
 router.post('/verify-otp', authController.verifyOtp);
 router.post('/login', authController.login);
 

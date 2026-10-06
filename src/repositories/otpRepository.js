@@ -54,7 +54,7 @@ export const otpRepository = {
     if (isDbConnected()) {
       try {
         await Otp.deleteMany({ email: cleanEmail });
-      } catch (err) {}
+      } catch (err) { }
     }
     memoryOtps.delete(cleanEmail);
   },

@@ -8,6 +8,8 @@ const QuestionSchema = new mongoose.Schema({
   userAnswer: { type: String, default: '' },
   answerType: { type: String, enum: ['text', 'voice'], default: 'text' },
   timeSpentSeconds: { type: Number, default: 0 },
+  followUpProbe: { type: String, default: '' },
+  probeAnswer: { type: String, default: '' },
   feedback: {
     accuracyScore: { type: Number, min: 0, max: 10, default: null },
     clarityScore: { type: Number, min: 0, max: 10, default: null },
@@ -36,6 +38,8 @@ const InterviewSessionSchema = new mongoose.Schema(
     role: { type: String, required: true },
     seniority: { type: String, enum: ['Junior', 'Mid-Level', 'Senior'], default: 'Junior' },
     techStack: [{ type: String }],
+    resumeText: { type: String, default: '' },
+    jobDescription: { type: String, default: '' },
     totalQuestions: { type: Number, default: 5 },
     currentQuestionIndex: { type: Number, default: 0 },
     status: {

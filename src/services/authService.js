@@ -54,6 +54,14 @@ export const authService = {
     }
 
     const cleanEmail = email.toLowerCase().trim();
+
+    // Prevent duplicate registration if user was already created
+    const existing = await userRepository.findByEmail(cleanEmail);
+    if (existing) {
+      await otpRepository.deleteOtp(cleanEmail);
+      throw new Error('An account with this email already exists. Please log in instead.');
+    }
+
     const validOtpRecord = await otpRepository.verifyOtp(cleanEmail, otp);
 
     if (!validOtpRecord) {
@@ -85,6 +93,45 @@ export const authService = {
         email: newUser.email,
       },
       token,
+    };
+  },
+
+  /**
+   * Resend OTP for pending registration
+   */
+  async resendOtp({ email, name, password }) {
+    if (!email) {
+      throw new Error('Email address is required');
+    }
+
+    const cleanEmail = email.toLowerCase().trim();
+    const existing = await userRepository.findByEmail(cleanEmail);
+    if (existing) {
+      throw new Error('An account with this email already exists. Please log in instead.');
+    }
+
+    // Generate new 6-digit OTP
+    const otp = Math.floor(100000 + Math.random() * 900000).toString();
+    const userName = name ? name.trim() : 'User';
+
+    let hashedPassword = '';
+    if (password) {
+      const salt = await bcrypt.genSalt(10);
+      hashedPassword = await bcrypt.hash(password, salt);
+    }
+
+    await otpRepository.saveOtp({
+      email: cleanEmail,
+      otp,
+      name: userName,
+      password: hashedPassword,
+    });
+
+    await sendOtpEmail(cleanEmail, otp, userName);
+
+    return {
+      message: `A fresh 6-digit verification code has been sent to ${cleanEmail}.`,
+      email: cleanEmail,
     };
   },
 

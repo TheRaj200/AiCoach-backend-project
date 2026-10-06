@@ -6,7 +6,7 @@ export const interviewController = {
    */
   async start(req, res) {
     try {
-      const { role, seniority, techStack, totalQuestions, userId } = req.body;
+      const { role, seniority, techStack, totalQuestions, userId, resumeText, jobDescription } = req.body;
 
       if (!role) {
         return res.status(400).json({
@@ -21,6 +21,8 @@ export const interviewController = {
         techStack,
         totalQuestions,
         userId,
+        resumeText,
+        jobDescription,
       });
 
       return res.status(201).json({
@@ -67,6 +69,39 @@ export const interviewController = {
       return res.status(500).json({
         success: false,
         error: error.message || 'Failed to evaluate answer',
+      });
+    }
+  },
+
+  /**
+   * POST /api/interview/submit-probe
+   */
+  async submitProbe(req, res) {
+    try {
+      const { sessionId, questionIndex, probeAnswer } = req.body;
+
+      if (!sessionId || questionIndex === undefined) {
+        return res.status(400).json({
+          success: false,
+          error: 'sessionId and questionIndex are required',
+        });
+      }
+
+      const result = await interviewService.submitProbeAnswer({
+        sessionId,
+        questionIndex: Number(questionIndex),
+        probeAnswer: probeAnswer || '',
+      });
+
+      return res.status(200).json({
+        success: true,
+        data: result,
+      });
+    } catch (error) {
+      console.error('❌ [Controller] Error submitting probe response:', error);
+      return res.status(500).json({
+        success: false,
+        error: error.message || 'Failed to evaluate probe response',
       });
     }
   },

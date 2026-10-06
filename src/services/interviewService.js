@@ -204,9 +204,9 @@ const getRandomUniqueQuestion = (role, usedQuestions = []) => {
 
 export const interviewService = {
   /**
-   * Start a new interview session and generate the initial question
+   * Start a new interview session and generate the initial question (with optional Resume & JD tailoring)
    */
-  async startInterview({ role, seniority, techStack, totalQuestions = 5, userId = 'guest' }) {
+  async startInterview({ role, seniority, techStack, totalQuestions = 5, userId = 'guest', resumeText = '', jobDescription = '' }) {
     const sessionId = uuidv4();
     const stackStr = Array.isArray(techStack) && techStack.length > 0 ? techStack.join(', ') : 'General Fullstack';
     const targetRole = role || 'Full-Stack Developer';
@@ -215,15 +215,20 @@ export const interviewService = {
     let firstQuestion = null;
 
     if (getGeminiClient()) {
+      const resumeContext = resumeText ? `\nCandidate Resume Highlights: "${resumeText.slice(0, 1000)}"` : '';
+      const jdContext = jobDescription ? `\nTarget Job Description Requirements: "${jobDescription.slice(0, 1000)}"` : '';
+
       const prompt = `
 You are an expert principal technical interviewer conducting an intense mock interview for a ${targetSeniority} ${targetRole}.
-Target Tech Stack: ${stackStr}.
+Target Tech Stack: ${stackStr}.${resumeContext}${jdContext}
 
 Task: Generate Question #1.
 Requirements:
 1. Must be a REAL, HIGH-IMPACT, practical technical interview question testing core principles or architecture of ${stackStr}.
-2. Must match ${targetSeniority} expectations (e.g. Junior = core mechanics & syntax; Senior = scale, internals, trade-offs, debugging).
-3. Do NOT ask trivial trivia; ask an applied engineering question.
+2. If Resume or JD is provided, specifically tailor the question to probe their stated project claims or target job competencies.
+3. Must match ${targetSeniority} expectations (e.g. Junior = core mechanics & syntax; Senior = scale, internals, trade-offs, debugging).
+4. Do NOT ask trivial trivia; ask an applied engineering question.
+5. Formatting: Keep the question prompt crisp and focused. If asking a multi-part scenario, separate numbered parts cleanly.
 
 Return a JSON object in this exact schema:
 {
@@ -246,9 +251,11 @@ Return a JSON object in this exact schema:
     const sessionData = {
       sessionId,
       userId,
-      role: role || 'Full-Stack Developer',
-      seniority: seniority || 'Junior',
+      role: targetRole,
+      seniority: targetSeniority,
       techStack: Array.isArray(techStack) ? techStack : ['JavaScript', 'React', 'Node.js'],
+      resumeText: resumeText || '',
+      jobDescription: jobDescription || '',
       totalQuestions: Number(totalQuestions) || 5,
       currentQuestionIndex: 0,
       status: 'in-progress',
@@ -261,6 +268,8 @@ Return a JSON object in this exact schema:
           userAnswer: '',
           answerType: 'text',
           timeSpentSeconds: 0,
+          followUpProbe: '',
+          probeAnswer: '',
           feedback: {},
         },
       ],
@@ -272,7 +281,7 @@ Return a JSON object in this exact schema:
   },
 
   /**
-   * Submit an answer for the current question, evaluate it, and generate the next question
+   * Submit an answer for the current question, evaluate it, and formulate an optional follow-up counter probe
    */
   async submitAnswerAndEvaluate({ sessionId, questionIndex, userAnswer, answerType = 'text', timeSpentSeconds = 0 }) {
     const session = await interviewRepository.findBySessionId(sessionId);
@@ -314,7 +323,6 @@ Return a JSON object in this exact schema:
         return { isSpam: true, reason: 'Answer is too short or empty' };
       }
       
-      // Repeated consecutive characters like "aaaaa", "asdfasdf", "zzzz"
       if (/(.)\1{4,}/i.test(clean)) {
         return { isSpam: true, reason: 'Repeated characters / keyboard smash detected' };
       }
@@ -329,12 +337,10 @@ Return a JSON object in this exact schema:
         return { isSpam: true, reason: 'Non-technical / placeholder keywords detected' };
       }
 
-      // Check question topic overlap
       const qKeywords = extractKeywords(questionText);
       const aKeywords = extractKeywords(clean);
       const matchCount = aKeywords.filter((w) => qKeywords.some((q) => q.includes(w) || w.includes(q))).length;
 
-      // Also check standard technical vocab
       const techLexicon = ['function', 'thread', 'callstack', 'heap', 'queue', 'async', 'sync', 'promise', 'callback', 'dom', 'component', 'state', 'props', 'render', 'memory', 'cpu', 'cache', 'database', 'query', 'index', 'table', 'key', 'token', 'request', 'response', 'api', 'server', 'client', 'http', 'cookie', 'jwt', 'security', 'latency', 'bandwidth', 'rate', 'limit', 'event', 'loop', 'macro', 'micro', 'task', 'hook', 'effect', 'memo', 'virtual', 'node', 'sql', 'nosql', 'scale', 'cluster', 'load'];
       const techMatchCount = aKeywords.filter((w) => techLexicon.includes(w)).length;
 
@@ -350,6 +356,8 @@ Return a JSON object in this exact schema:
 
     // Evaluate answer via Gemini if valid AI key available and not spam
     let feedback = null;
+    let followUpProbe = '';
+
     if (getGeminiClient() && !isSpam) {
       const prompt = `
 You are a STRICT, HONEST, and UNCOMPROMISING Principal Engineering Hiring Bar Raiser.
@@ -363,12 +371,13 @@ Evaluation Rules:
 3. If the answer is partially correct but misses core mechanics, award 3-4/10.
 4. If the answer is decent but lacks edge-cases or production depth, award 6-7/10.
 5. Award 8-10 ONLY for outstanding, senior-level precision covering execution mechanics, trade-offs, and failure modes.
-6. If no valid technical points exist, explicitly put in strengths: ["No valid technical concepts demonstrated"].
+6. Generate a sharp, realistic 1-sentence "followUpProbe" (a follow-up counter question testing edge-case / scale / failure recovery based directly on their answer).
 
 Return a JSON object in this exact format:
 {
   "accuracyScore": 1, // Integer 0-10
   "clarityScore": 1, // Integer 0-10
+  "followUpProbe": "A sharp 1-sentence counter-question or edge-case probe challenging their answer",
   "strengths": ["None" or valid strong point],
   "improvements": ["Specific error / misconception 1", "Specific missing concept 2"],
   "idealAnswer": "A concise, high-impact 2-3 sentence ideal answer from a principal engineer explaining how to properly solve this."
@@ -376,8 +385,26 @@ Return a JSON object in this exact format:
 `;
       try {
         feedback = await generateAIJSON(prompt, 'You are a rigorous, honest, and strict technical interview bar raiser. Return JSON only.');
+        if (feedback?.followUpProbe) {
+          followUpProbe = feedback.followUpProbe;
+        }
       } catch (err) {
         console.warn('⚠️ [Service] AI evaluation error, using fallback:', err.message);
+      }
+    }
+
+    // Heuristic probe generation for offline fallback
+    if (!followUpProbe && !isSpam) {
+      if (targetQ.questionText.toLowerCase().includes('event loop')) {
+        followUpProbe = 'What happens if a microtask recursively enqueues another microtask inside the event loop? How does it affect the rendering queue?';
+      } else if (targetQ.questionText.toLowerCase().includes('react')) {
+        followUpProbe = 'If a parent component passes an inline callback or unmemoized object to a React.memo child, does it still re-render? How do you prevent it?';
+      } else if (targetQ.questionText.toLowerCase().includes('rate limit')) {
+        followUpProbe = 'How does your rate limiter handle race conditions if multiple distributed nodes make simultaneous Redis updates?';
+      } else if (targetQ.questionText.toLowerCase().includes('index')) {
+        followUpProbe = 'What is the performance drawback of having too many indexes on a write-heavy database table?';
+      } else {
+        followUpProbe = `How would you monitor and handle edge-case failure modes in production for this specific architecture?`;
       }
     }
 
@@ -385,50 +412,53 @@ Return a JSON object in this exact format:
       feedback = {
         accuracyScore: 0,
         clarityScore: 1,
+        followUpProbe: '',
         strengths: ['No relevant technical concepts demonstrated in response'],
         improvements: [
           `Response rejected: ${relevance.reason}`,
-          `Did not address the core subject matter of: "${targetQ.questionText}"`,
+          'Did not address the core technical requirements of this question',
           'Provide a concrete technical explanation with mechanisms, syntax, or architecture.',
         ],
-        idealAnswer: `For "${targetQ.questionText}", a strong candidate explains the underlying architecture, execution lifecycle, and practical engineering trade-offs.`,
+        idealAnswer: 'A principal engineer explains the core architecture, data flow, failure recovery, and practical engineering trade-offs step-by-step.',
       };
     } else if (!feedback || typeof feedback.accuracyScore !== 'number') {
-      // Offline fallback heuristic evaluation for legitimate text
       const { matchCount = 0, techMatchCount = 0, totalWords = 0 } = relevance;
       
       if (totalWords < 12 || (matchCount + techMatchCount) < 2) {
         feedback = {
           accuracyScore: 2,
           clarityScore: 3,
+          followUpProbe,
           strengths: ['Attempted to touch upon relevant concepts'],
           improvements: [
             'Response is very shallow and misses key internal mechanisms',
-            `Elaborate specifically on how "${targetQ.questionText.slice(0, 50)}..." behaves under the hood`,
+            'Elaborate specifically on how the underlying runtime lifecycle and state transitions behave under the hood',
           ],
-          idealAnswer: `A comprehensive answer for "${targetQ.questionText}" covers core runtime mechanisms, typical failure modes, and performance trade-offs.`,
+          idealAnswer: 'A comprehensive answer covers core runtime mechanisms, end-to-end data flow, typical failure modes, and performance trade-offs.',
         };
       } else if ((matchCount + techMatchCount) >= 4 && totalWords >= 25) {
         feedback = {
           accuracyScore: 8,
           clarityScore: 8,
+          followUpProbe,
           strengths: ['Mentioned key domain terminology and accurate flow'],
           improvements: [
             'Include specific production edge-cases and error boundary handling',
             'Discuss memory/CPU profiling implications in high-load scenarios',
           ],
-          idealAnswer: `For "${targetQ.questionText}", a principal engineer articulates the core lifecycle, asynchronous queue dispatching, and memory profiling.`,
+          idealAnswer: 'A principal engineer articulates the exact execution sequence, asynchronous dispatching, and memory profiling.',
         };
       } else {
         feedback = {
           accuracyScore: 5,
           clarityScore: 5,
+          followUpProbe,
           strengths: ['Identified general concepts related to the question'],
           improvements: [
             'Needs deeper technical depth rather than high-level surface statements',
             'Explain concrete examples and trade-offs rather than generic definitions',
           ],
-          idealAnswer: `For "${targetQ.questionText}", address the exact sequence of execution, internal data structures, and edge-case handling.`,
+          idealAnswer: 'A strong technical response addresses the exact sequence of execution, internal data structures, and edge-case handling.',
         };
       }
     }
@@ -437,6 +467,7 @@ Return a JSON object in this exact format:
     targetQ.answerType = answerType;
     targetQ.timeSpentSeconds = timeSpentSeconds;
     targetQ.feedback = feedback;
+    targetQ.followUpProbe = followUpProbe;
     targetQ.answeredAt = new Date();
 
     const isLastQuestion = questionIndex + 1 >= session.totalQuestions;
@@ -462,6 +493,7 @@ Requirements for Question #${nextQNum}:
 1. CRITICAL: You MUST NOT repeat, overlap, or rephrase any of the previously asked questions listed above.
 2. Formulate a BRAND NEW, HIGH-IMPACT, practical interview question testing a different core technical dimension (e.g. system design, edge cases, error handling, performance tuning, architecture, or deep language mechanics) of ${stackStr}.
 3. The question must strictly test real engineering problem solving suitable for a ${session.seniority} level.
+4. Formatting: Keep the question prompt crisp and focused. If asking a multi-part scenario, separate numbered parts cleanly.
 
 Return JSON in this exact schema:
 {
@@ -489,6 +521,8 @@ Return JSON in this exact schema:
         userAnswer: '',
         answerType: 'text',
         timeSpentSeconds: 0,
+        followUpProbe: '',
+        probeAnswer: '',
         feedback: {},
       });
     }
@@ -501,9 +535,46 @@ Return JSON in this exact schema:
 
     return {
       feedback,
+      followUpProbe,
       isLastQuestion,
       nextQuestionIndex: nextIndex,
       nextQuestion: isLastQuestion ? null : questions[nextIndex],
+      session: updated,
+    };
+  },
+
+  /**
+   * Submit candidate defense for a live follow-up probe and re-calibrate feedback score
+   */
+  async submitProbeAnswer({ sessionId, questionIndex, probeAnswer = '' }) {
+    const session = await interviewRepository.findBySessionId(sessionId);
+    if (!session) {
+      throw new Error('Interview session not found');
+    }
+
+    const questions = [...(session.questions || [])];
+    const targetQ = questions[questionIndex];
+
+    if (!targetQ) {
+      throw new Error(`Question index ${questionIndex} out of range`);
+    }
+
+    targetQ.probeAnswer = probeAnswer;
+
+    // Recalibrate score with probe evaluation if substantive
+    if (probeAnswer.trim().length > 10 && targetQ.feedback) {
+      const currentScore = targetQ.feedback.accuracyScore || 5;
+      const newScore = Math.min(10, currentScore + (probeAnswer.trim().length > 30 ? 2 : 1));
+      targetQ.feedback.accuracyScore = newScore;
+      targetQ.feedback.strengths = [
+        ...(targetQ.feedback.strengths || []),
+        'Addressed live interviewer follow-up probe directly',
+      ];
+    }
+
+    const updated = await interviewRepository.updateSession(sessionId, { questions });
+    return {
+      feedback: targetQ.feedback,
       session: updated,
     };
   },

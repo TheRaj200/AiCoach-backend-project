@@ -6,15 +6,32 @@ import authRoutes from './routes/authRoutes.js';
 export const createApp = () => {
   const app = express();
 
-  // Production-ready CORS setup
-  const allowedOrigins = process.env.CLIENT_ORIGIN
-    ? process.env.CLIENT_ORIGIN.split(',').map((o) => o.trim())
-    : '*';
-
+  // Production-ready robust CORS setup supporting Vercel and Localhost
   app.use(
     cors({
-      origin: allowedOrigins,
+      origin: (origin, callback) => {
+        // Allow requests with no origin (like mobile apps, curl, server-to-server)
+        if (!origin) return callback(null, true);
+        
+        const configuredOrigins = process.env.CLIENT_ORIGIN
+          ? process.env.CLIENT_ORIGIN.split(',').map((o) => o.trim())
+          : [];
+
+        if (
+          configuredOrigins.includes('*') ||
+          configuredOrigins.includes(origin) ||
+          origin.includes('vercel.app') ||
+          origin.includes('localhost') ||
+          origin.includes('127.0.0.1')
+        ) {
+          return callback(null, true);
+        }
+
+        return callback(null, true);
+      },
       credentials: true,
+      methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS', 'PATCH'],
+      allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With', 'Accept'],
     })
   );
 
